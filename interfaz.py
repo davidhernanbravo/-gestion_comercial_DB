@@ -12,10 +12,14 @@ from facturacion import Facturacion
 
 class AplicacionPrincipal:
 
-    def __init__(self, ventana_raiz):
-        # Guardamos la ventana principal enviada desde main.py
+    def __init__(self, ventana_raiz, rol_usuario="admin"):
+        # Guardamos la ventana principal y el rol enviado desde main.py
         self.ventana_raiz = ventana_raiz
-        self.ventana_raiz.title("Sistema de Gestión Comercial y Facturación - MVP")
+        self.rol_usuario = rol_usuario
+
+        self.ventana_raiz.title(
+            f"Sistema de Gestión Comercial y Facturación - Rol: {self.rol_usuario}"
+        )
         self.ventana_raiz.geometry("850x550")
         self.ventana_raiz.resizable(False, False)
 

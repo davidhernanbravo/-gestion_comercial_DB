@@ -1,395 +1,411 @@
 # database.py
 
 import sqlite3
+from config import ROL_ADMIN
 
-NOMBRE_DB = "sistema_facturacion.db"
+DB_NAME = "sistema_facturacion.db"
 
+
+# ==========================================
+# BLOQUE 1: CONEXIÓN Y CONFIGURACIÓN
+# ==========================================
 
 def obtener_conexion():
-  """Crea y devuelve una conexión a la base de datos SQLite."""
-  conexion = sqlite3.connect(NOMBRE_DB)
-  conexion.row_factory = sqlite3.Row
-  return conexion
+    """
+    Abre y devuelve una conexión activa con la base de datos SQLite.
+    Configura row_factory para acceder a las columnas por su nombre.
+    """
+    conexion = sqlite3.connect(DB_NAME)
+    conexion.row_factory = sqlite3.Row
+    return conexion
 
+
+# ==========================================
+# BLOQUE 2: INICIALIZACIÓN DE LA ESTRUCTURA
+# ==========================================
 
 def inicializar_base_datos():
-  """Crea las tablas necesarias si aún no existen."""
-  conexion = obtener_conexion()
-  cursor = conexion.cursor()
+    """
+    Crea la estructura completa de tablas si no existen e
+    inserta el usuario administrador por defecto.
+    """
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
 
-  cursor.execute("""
+    # Tabla de Clientes
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS clientes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            razon_social TEXT NOT NULL,
-            contacto TEXT,
-            cuit TEXT UNIQUE NOT NULL
+            nombre TEXT NOT NULL,
+            telefono TEXT,
+            email TEXT,
+            direccion TEXT
         )
     """)
 
-  cursor.execute("""
+    # Tabla de Proveedores
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS proveedores (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre TEXT NOT NULL,
+            telefono TEXT,
+            email TEXT,
+            direccion TEXT
+        )
+    """)
+
+    # Tabla de Empleados
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS empleados (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             nombre TEXT NOT NULL,
-            legajo TEXT UNIQUE NOT NULL,
-            puesto TEXT
+            puesto TEXT,
+            salario REAL,
+            fecha_ingreso TEXT
         )
     """)
 
-  cursor.execute("""
-        CREATE TABLE IF NOT EXISTS proveedores (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            razon_social TEXT NOT NULL,
-            contacto TEXT,
-            cuit TEXT UNIQUE NOT NULL
-        )
-    """)
-
-  cursor.execute("""
+    # Tabla de Productos (Inventario / Stock)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS productos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            codigo TEXT UNIQUE NOT NULL,
             nombre TEXT NOT NULL,
             precio REAL NOT NULL,
             stock INTEGER NOT NULL
         )
     """)
 
-  cursor.execute("""
-        CREATE TABLE IF NOT EXISTS facturas (
+    # Tabla de Usuarios (Seguridad y Control de Acceso por Roles)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS usuarios (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            cliente_info TEXT NOT NULL,
-            total REAL NOT NULL,
-            fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            usuario TEXT UNIQUE NOT NULL,
+            contrasena TEXT NOT NULL,
+            rol TEXT NOT NULL,
+            empleado_id INTEGER,
+            FOREIGN KEY (empleado_id) REFERENCES empleados (id)
         )
     """)
 
-  cursor.execute("""
-        CREATE TABLE IF NOT EXISTS detalle_facturas (
+    # Tabla de Ventas (Encabezado de la factura)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ventas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            factura_id INTEGER NOT NULL,
-            producto TEXT NOT NULL,
+            cliente_id INTEGER,
+            fecha TEXT NOT NULL,
+            total REAL NOT NULL,
+            FOREIGN KEY (cliente_id) REFERENCES clientes (id)
+        )
+    """)
+
+    # Tabla de Detalle de Ventas (Líneas de artículos vendidos)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS detalle_ventas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            venta_id INTEGER NOT NULL,
+            producto_id INTEGER NOT NULL,
             cantidad INTEGER NOT NULL,
             precio_unitario REAL NOT NULL,
-            subtotal REAL NOT NULL,
-            FOREIGN KEY (factura_id) REFERENCES facturas (id)
+            FOREIGN KEY (venta_id) REFERENCES ventas (id),
+            FOREIGN KEY (producto_id) REFERENCES productos (id)
         )
     """)
 
-  conexion.commit()
-  conexion.close()
+    # Creación del usuario inicial 'admin' si la base de datos está recién instalada
+    cursor.execute("SELECT COUNT(*) AS total FROM usuarios")
+    if cursor.fetchone()["total"] == 0:
+        cursor.execute(
+            """
+            INSERT INTO usuarios (usuario, contrasena, rol)
+            VALUES (?, ?, ?)
+            """,
+            ("admin", "admin123", ROL_ADMIN)
+        )
+
+    conexion.commit()
+    conexion.close()
 
 
-# ==============================================================================
-# FUNCIONES CRUD PARA CLIENTES
-# ==============================================================================
+# ==========================================
+# BLOQUE 3: AUTENTICACIÓN Y SEGURIDAD
+# ==========================================
 
+def validar_credenciales(usuario, contrasena):
+    """
+    Verifica si las credenciales coinciden en la tabla de usuarios.
+    Devuelve un diccionario con los datos del usuario o None si falla.
+    """
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
+    cursor.execute(
+        """
+        SELECT id, usuario, rol, empleado_id 
+        FROM usuarios 
+        WHERE usuario = ? AND contrasena = ?
+        """,
+        (usuario, contrasena)
+    )
+    usuario_encontrado = cursor.fetchone()
+    conexion.close()
+
+    if usuario_encontrado:
+        return {
+            "id": usuario_encontrado["id"],
+            "usuario": usuario_encontrado["usuario"],
+            "rol": usuario_encontrado["rol"],
+            "empleado_id": usuario_encontrado["empleado_id"]
+        }
+    return None
+
+
+# ==========================================
+# BLOQUE 4: OPERACIONES CRUD - CLIENTES
+# ==========================================
 
 def obtener_clientes():
-  conexion = obtener_conexion()
-  cursor = conexion.cursor()
-  cursor.execute(
-      "SELECT id, razon_social, contacto, cuit FROM clientes ORDER BY"
-      " razon_social"
-  )
-  clientes = cursor.fetchall()
-  conexion.close()
-  return clientes
+    """Devuelve la lista completa de clientes."""
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
+    cursor.execute("SELECT * FROM clientes")
+    clientes = cursor.fetchall()
+    conexion.close()
+    return clientes
 
 
-def insertar_cliente(razon_social, contacto, cuit):
-  conexion = obtener_conexion()
-  cursor = conexion.cursor()
-  try:
+def insertar_cliente(nombre, telefono, email, direccion):
+    """Guarda un nuevo cliente en la base de datos."""
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
     cursor.execute(
-        """
-            INSERT INTO clientes (razon_social, contacto, cuit)
-            VALUES (?, ?, ?)
-        """,
-        (razon_social, contacto, cuit),
+        "INSERT INTO clientes (nombre, telefono, email, direccion) VALUES (?, ?, ?, ?)",
+        (nombre, telefono, email, direccion)
     )
     conexion.commit()
     conexion.close()
-    return True
-  except sqlite3.Error:
-    conexion.close()
-    return False
 
 
-def actualizar_cliente(id_cliente, razon_social, contacto, cuit):
-  conexion = obtener_conexion()
-  cursor = conexion.cursor()
-  try:
+def actualizar_cliente(id_cliente, nombre, telefono, email, direccion):
+    """Modifica los datos de un cliente existente."""
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
     cursor.execute(
-        """
-            UPDATE clientes
-            SET razon_social = ?, contacto = ?, cuit = ?
-            WHERE id = ?
-        """,
-        (razon_social, contacto, cuit, id_cliente),
+        "UPDATE clientes SET nombre=?, telefono=?, email=?, direccion=? WHERE id=?",
+        (nombre, telefono, email, direccion, id_cliente)
     )
     conexion.commit()
     conexion.close()
-    return True
-  except sqlite3.Error:
-    conexion.close()
-    return False
 
 
 def eliminar_cliente(id_cliente):
-  conexion = obtener_conexion()
-  cursor = conexion.cursor()
-  cursor.execute("DELETE FROM clientes WHERE id = ?", (id_cliente,))
-  conexion.commit()
-  conexion.close()
-  return True
+    """Borra un cliente según su ID."""
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
+    cursor.execute("DELETE FROM clientes WHERE id=?", (id_cliente,))
+    conexion.commit()
+    conexion.close()
 
 
-# ==============================================================================
-# FUNCIONES CRUD PARA EMPLEADOS
-# ==============================================================================
-
+# ==========================================
+# BLOQUE 5: OPERACIONES CRUD - EMPLEADOS
+# ==========================================
 
 def obtener_empleados():
-  conexion = obtener_conexion()
-  cursor = conexion.cursor()
-  cursor.execute(
-      "SELECT id, nombre, legajo, puesto FROM empleados ORDER BY nombre"
-  )
-  empleados = cursor.fetchall()
-  conexion.close()
-  return empleados
+    """Devuelve la lista completa de empleados."""
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
+    cursor.execute("SELECT * FROM empleados")
+    empleados = cursor.fetchall()
+    conexion.close()
+    return empleados
 
 
-def insertar_empleado(nombre, legajo, puesto):
-  conexion = obtener_conexion()
-  cursor = conexion.cursor()
-  try:
+def insertar_empleado(nombre, puesto, salario, fecha_ingreso):
+    """Guarda un nuevo empleado en la base de datos."""
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
     cursor.execute(
-        """
-            INSERT INTO empleados (nombre, legajo, puesto)
-            VALUES (?, ?, ?)
-        """,
-        (nombre, legajo, puesto),
+        "INSERT INTO empleados (nombre, puesto, salario, fecha_ingreso) VALUES (?, ?, ?, ?)",
+        (nombre, puesto, salario, fecha_ingreso)
     )
     conexion.commit()
     conexion.close()
-    return True
-  except sqlite3.Error:
-    conexion.close()
-    return False
 
 
-def actualizar_empleado(id_empleado, nombre, legajo, puesto):
-  conexion = obtener_conexion()
-  cursor = conexion.cursor()
-  try:
+def actualizar_empleado(id_empleado, nombre, puesto, salario, fecha_ingreso):
+    """Modifica los datos de un empleado existente."""
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
     cursor.execute(
-        """
-            UPDATE empleados
-            SET nombre = ?, legajo = ?, puesto = ?
-            WHERE id = ?
-        """,
-        (nombre, legajo, puesto, id_empleado),
+        "UPDATE empleados SET nombre=?, puesto=?, salario=?, fecha_ingreso=? WHERE id=?",
+        (nombre, puesto, salario, fecha_ingreso, id_empleado)
     )
     conexion.commit()
     conexion.close()
-    return True
-  except sqlite3.Error:
-    conexion.close()
-    return False
 
 
 def eliminar_empleado(id_empleado):
-  conexion = obtener_conexion()
-  cursor = conexion.cursor()
-  cursor.execute("DELETE FROM empleados WHERE id = ?", (id_empleado,))
-  conexion.commit()
-  conexion.close()
-  return True
+    """Borra un empleado según su ID."""
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
+    cursor.execute("DELETE FROM empleados WHERE id=?", (id_empleado,))
+    conexion.commit()
+    conexion.close()
 
 
-# ==============================================================================
-# FUNCIONES CRUD PARA PROVEEDORES
-# ==============================================================================
-
+# ==========================================
+# BLOQUE 6: OPERACIONES CRUD - PROVEEDORES
+# ==========================================
 
 def obtener_proveedores():
-  conexion = obtener_conexion()
-  cursor = conexion.cursor()
-  cursor.execute(
-      "SELECT id, razon_social, contacto, cuit FROM proveedores ORDER BY"
-      " razon_social"
-  )
-  proveedores = cursor.fetchall()
-  conexion.close()
-  return proveedores
+    """Devuelve la lista completa de proveedores."""
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
+    cursor.execute("SELECT * FROM proveedores")
+    proveedores = cursor.fetchall()
+    conexion.close()
+    return proveedores
 
 
-def insertar_proveedor(razon_social, contacto, cuit):
-  conexion = obtener_conexion()
-  cursor = conexion.cursor()
-  try:
+def insertar_proveedor(nombre, telefono, email, direccion):
+    """Guarda un nuevo proveedor en la base de datos."""
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
     cursor.execute(
-        """
-            INSERT INTO proveedores (razon_social, contacto, cuit)
-            VALUES (?, ?, ?)
-        """,
-        (razon_social, contacto, cuit),
+        "INSERT INTO proveedores (nombre, telefono, email, direccion) VALUES (?, ?, ?, ?)",
+        (nombre, telefono, email, direccion)
     )
     conexion.commit()
     conexion.close()
-    return True
-  except sqlite3.Error:
-    conexion.close()
-    return False
 
 
-def actualizar_proveedor(id_proveedor, razon_social, contacto, cuit):
-  conexion = obtener_conexion()
-  cursor = conexion.cursor()
-  try:
+def actualizar_proveedor(id_proveedor, nombre, telefono, email, direccion):
+    """Modifica los datos de un proveedor existente."""
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
     cursor.execute(
-        """
-            UPDATE proveedores
-            SET razon_social = ?, contacto = ?, cuit = ?
-            WHERE id = ?
-        """,
-        (razon_social, contacto, cuit, id_proveedor),
+        "UPDATE proveedores SET nombre=?, telefono=?, email=?, direccion=? WHERE id=?",
+        (nombre, telefono, email, direccion, id_proveedor)
     )
     conexion.commit()
     conexion.close()
-    return True
-  except sqlite3.Error:
-    conexion.close()
-    return False
 
 
 def eliminar_proveedor(id_proveedor):
-  conexion = obtener_conexion()
-  cursor = conexion.cursor()
-  cursor.execute("DELETE FROM proveedores WHERE id = ?", (id_proveedor,))
-  conexion.commit()
-  conexion.close()
-  return True
+    """Borra un proveedor según su ID."""
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
+    cursor.execute("DELETE FROM proveedores WHERE id=?", (id_proveedor,))
+    conexion.commit()
+    conexion.close()
 
 
-# ==============================================================================
-# FUNCIONES CRUD PARA PRODUCTOS (STOCK)
-# ==============================================================================
-
+# ==========================================
+# BLOQUE 7: OPERACIONES CRUD - PRODUCTOS (STOCK)
+# ==========================================
 
 def obtener_productos():
-  conexion = obtener_conexion()
-  cursor = conexion.cursor()
-  cursor.execute(
-      "SELECT id, nombre, precio, stock FROM productos ORDER BY nombre"
-  )
-  productos = cursor.fetchall()
-  conexion.close()
-  return productos
+    """Devuelve la lista completa de productos en stock."""
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
+    cursor.execute("SELECT * FROM productos")
+    productos = cursor.fetchall()
+    conexion.close()
+    return productos
 
 
-def insertar_producto(nombre, precio, stock):
-  conexion = obtener_conexion()
-  cursor = conexion.cursor()
-  try:
+def insertar_producto(codigo, nombre, precio, stock):
+    """Agrega un nuevo producto al inventario."""
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
     cursor.execute(
-        """
-            INSERT INTO productos (nombre, precio, stock)
-            VALUES (?, ?, ?)
-        """,
-        (nombre, precio, stock),
+        "INSERT INTO productos (codigo, nombre, precio, stock) VALUES (?, ?, ?, ?)",
+        (codigo, nombre, precio, stock)
     )
     conexion.commit()
     conexion.close()
-    return True
-  except sqlite3.Error:
-    conexion.close()
-    return False
 
 
-def actualizar_producto(id_producto, nombre, precio, stock):
-  conexion = obtener_conexion()
-  cursor = conexion.cursor()
-  try:
+def actualizar_producto(id_producto, codigo, nombre, precio, stock):
+    """Actualiza los datos o las cantidades de un producto."""
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
     cursor.execute(
-        """
-            UPDATE productos
-            SET nombre = ?, precio = ?, stock = ?
-            WHERE id = ?
-        """,
-        (nombre, precio, stock, id_producto),
+        "UPDATE productos SET codigo=?, nombre=?, precio=?, stock=? WHERE id=?",
+        (codigo, nombre, precio, stock, id_producto)
     )
     conexion.commit()
     conexion.close()
-    return True
-  except sqlite3.Error:
-    conexion.close()
-    return False
 
 
 def eliminar_producto(id_producto):
-  conexion = obtener_conexion()
-  cursor = conexion.cursor()
-  cursor.execute("DELETE FROM productos WHERE id = ?", (id_producto,))
-  conexion.commit()
-  conexion.close()
-  return True
+    """Elimina un producto del inventario."""
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
+    cursor.execute("DELETE FROM productos WHERE id=?", (id_producto,))
+    conexion.commit()
+    conexion.close()
 
 
-# ==============================================================================
-# FUNCIONES DE FACTURACIÓN
-# ==============================================================================
+# ==========================================
+# BLOQUE 8: FACTURACIÓN Y VENTAS
+# ==========================================
 
+def registrar_venta(cliente_id, fecha, total, lista_productos):
+    """
+    Registra una factura completa: guarda la venta principal,
+    inserta cada detalle de producto y descuenta el stock disponible.
+    """
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
 
-def insertar_factura(cliente_info, total, detalles):
-  """Guarda la cabecera, los ítems de detalle y descuenta el stock del producto."""
-  conexion = obtener_conexion()
-  cursor = conexion.cursor()
-  try:
-    # 1. Insertar la cabecera de la factura
+    # 1. Crear el encabezado de la venta
     cursor.execute(
-        "INSERT INTO facturas (cliente_info, total) VALUES (?, ?)",
-        (cliente_info, total),
+        "INSERT INTO ventas (cliente_id, fecha, total) VALUES (?, ?, ?)",
+        (cliente_id, fecha, total)
     )
-    factura_id = cursor.lastrowid
+    venta_id = cursor.lastrowid
 
-    # 2. Insertar los ítems del detalle y descontar el stock
-    for item in detalles:
-      prod_nombre = item["producto"]
-      cant = item["cantidad"]
-      precio_u = item["precio_unitario"]
-      subt = item["subtotal"]
-
-      cursor.execute(
-          """
-                INSERT INTO detalle_facturas (factura_id, producto, cantidad, precio_unitario, subtotal)
-                VALUES (?, ?, ?, ?, ?)
+    # 2. Registrar los detalles y actualizar el inventario
+    for prod in lista_productos:
+        cursor.execute(
+            """
+            INSERT INTO detalle_ventas (venta_id, producto_id, cantidad, precio_unitario)
+            VALUES (?, ?, ?, ?)
             """,
-          (factura_id, prod_nombre, cant, precio_u, subt),
-      )
+            (venta_id, prod[0], prod[1], prod[2])
+        )
 
-      # Actualización de existencias en tiempo real
-      cursor.execute(
-          "UPDATE productos SET stock = stock - ? WHERE nombre = ?",
-          (cant, prod_nombre),
-      )
+        # Descuenta las unidades vendidas del stock actual
+        cursor.execute(
+            "UPDATE productos SET stock = stock - ? WHERE id = ?",
+            (prod[1], prod[0])
+        )
 
     conexion.commit()
     conexion.close()
-    return True
-  except sqlite3.Error:
-    conexion.rollback()
+    return venta_id
+
+
+def insertar_factura(cliente_id, fecha, total, lista_productos):
+    """Sincroniza la llamada de insertar_factura con la función registrar_venta."""
+    return registrar_venta(cliente_id, fecha, total, lista_productos)
+
+
+def obtener_ventas():
+    """Devuelve el historial general de ventas registradas."""
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
+    cursor.execute("""
+        SELECT v.id, v.fecha, v.total, c.nombre AS cliente
+        FROM ventas v
+        LEFT JOIN clientes c ON v.cliente_id = c.id
+    """)
+    ventas = cursor.fetchall()
     conexion.close()
-    return False
+    return ventas
 
 
 def obtener_facturas():
-  """Devuelve el historial de facturas emitidas ordenadas por fecha reciente."""
-  conexion = obtener_conexion()
-  cursor = conexion.cursor()
-  cursor.execute(
-      "SELECT id, cliente_info, total, fecha FROM facturas ORDER BY fecha DESC"
-  )
-  facturas = cursor.fetchall()
-  conexion.close()
-  return facturas
+    """Sincroniza la llamada de obtener_facturas con la función obtener_ventas."""
+    return obtener_ventas()
